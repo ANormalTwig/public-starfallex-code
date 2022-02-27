@@ -33,7 +33,7 @@ local function checkHttp()
                 )
             end
             
-            if http_queue == 0 then
+            if #http_queue == 0 then
                 timer.stop("_HTTP_QUEUE_LOOP")
             end
         else
