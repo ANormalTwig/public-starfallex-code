@@ -49,7 +49,6 @@ timer.stop("_HTTP_QUEUE_LOOP")
 // @param function callbackSuccess The function to be called on request success, taking the arguments body (string), length (number), headers (table) and code (number)
 // @param function? callbackFail The function to be called on request fail, taking the failing reason as an argument
 // @param table? headers GET headers to be sent
-// @return number Index of http request
 function http.get(_url, _cbY, _cbN, _headers)
     local httpTable = {
         method = "get",
@@ -70,7 +69,6 @@ end
 // @param function? callbackSuccess Optional function to be called on request success, taking the arguments body (string), length (number), headers (table) and code (number)
 // @param function? callbackFail Optional function to be called on request fail, taking the failing reason as an argument
 // @param table? headers Optional POST headers to be sent
-// @return number Index of http request
 function http.post(_url, _payload, _cbY, _cbN, _headers)
     local httpTable = {
         method = "post",
