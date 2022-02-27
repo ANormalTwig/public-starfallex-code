@@ -12,8 +12,7 @@ local _http = table.copy(http)
 local function checkHttp()
     if #http_queue > 0 then
         if _http.canRequest() then
-            local key, httpInfo = next(http_queue)
-            http_queue[key] = nil
+            local httpInfo = table.remove(http_queue, 1)
             
             local method = httpInfo.method
             if method=="get" then
@@ -60,9 +59,8 @@ function http.get(_url, _cbY, _cbN, _headers)
         headers = _headers
     }
     
-    local requestIndex = table.insert(http_queue, httpTable)
+    table.insert(http_queue, httpTable)
     checkHttp()
-    return requestIndex
 end
 
 /// Runs a new http POST request
@@ -83,20 +81,6 @@ function http.post(_url, _payload, _cbY, _cbN, _headers)
         headers = _headers
     }
     
-    local requestIndex = table.insert(http_queue, httpTable)
+    table.insert(http_queue, httpTable)
     checkHttp()
-    return requestIndex
-end
-
-/// Cancels a queued http request
-
-// @shared
-// @param number index The index of the http request you want to cancel
-function http.cancel(queueInd)
-    if http_queue[queueInd] then
-        http_queue[queueInd] = nil
-        return true
-    end
-    
-    return false
 end
