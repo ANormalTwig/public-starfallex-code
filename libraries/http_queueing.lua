@@ -43,12 +43,15 @@ end
 timer.create("_HTTP_QUEUE_LOOP", 1, 0, checkHttp)
 timer.stop("_HTTP_QUEUE_LOOP")
 
-/// Runs a new http GET request
-
-// @param string url Http target url
-// @param function callbackSuccess The function to be called on request success, taking the arguments body (string), length (number), headers (table) and code (number)
-// @param function? callbackFail The function to be called on request fail, taking the failing reason as an argument
-// @param table? headers GET headers to be sent
+--[[
+    Runs a new http GET request
+    
+    @param string url Http target url
+    @param function callbackSuccess The function to be called on request success, taking the arguments body (string), length (number), headers (table) and code (number)
+    @param function? callbackFail The function to be called on request fail, taking the failing reason as an argument
+    @param table? headers GET headers to be sent
+    @return table http request tabale
+]]
 function http.get(_url, _cbY, _cbN, _headers)
     local httpTable = {
         method = "get",
@@ -64,13 +67,16 @@ function http.get(_url, _cbY, _cbN, _headers)
     return httpTable
 end
 
-/// Runs a new http POST request
-
-/// @param string url Http target url
-// @param table? payload Optional POST payload to be sent, can be both table and string. When table is used, the request body is encoded as application/x-www-form-urlencoded
-// @param function? callbackSuccess Optional function to be called on request success, taking the arguments body (string), length (number), headers (table) and code (number)
-// @param function? callbackFail Optional function to be called on request fail, taking the failing reason as an argument
-// @param table? headers Optional POST headers to be sent
+--[[
+    Runs a new http POST request
+    
+    @param string url Http target url
+    @param table? payload Optional POST payload to be sent, can be both table and string. When table is used, the request body is encoded as application/x-www-form-urlencoded
+    @param function? callbackSuccess Optional function to be called on request success, taking the arguments body (string), length (number), headers (table) and code (number)
+    @param function? callbackFail Optional function to be called on request fail, taking the failing reason as an argument
+    @param table? headers Optional POST headers to be sent
+    @return table http request tabale
+]]
 function http.post(_url, _payload, _cbY, _cbN, _headers)
     local httpTable = {
         method = "post",
@@ -87,10 +93,11 @@ function http.post(_url, _payload, _cbY, _cbN, _headers)
     return httpTable
 end
 
-/// Cancels a queued http request
-
-// @shared
-// @param table request The request table of the http request you want to cancel
+--[[
+    Cancels a queued http request
+    
+    @param table request The request table of the http request you want to cancel
+]]
 function http.cancel(item)
     table.removeByValue(http_queue, item)
 end 
