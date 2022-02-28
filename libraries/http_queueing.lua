@@ -60,6 +60,8 @@ function http.get(_url, _cbY, _cbN, _headers)
     
     table.insert(http_queue, httpTable)
     checkHttp()
+    
+    return httpTable
 end
 
 /// Runs a new http POST request
@@ -81,4 +83,14 @@ function http.post(_url, _payload, _cbY, _cbN, _headers)
     
     table.insert(http_queue, httpTable)
     checkHttp()
+    
+    return httpTable
 end
+
+/// Cancels a queued http request
+
+// @shared
+// @param table request The request table of the http request you want to cancel
+function http.cancel(item)
+    table.removeByValue(http_queue, item)
+end 
