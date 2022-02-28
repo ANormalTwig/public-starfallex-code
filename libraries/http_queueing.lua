@@ -1,6 +1,6 @@
 --[[
     Library to make all http.get and http.post requests work based off of a queue system.
-    All http.get and http.post requests return a number which can be used to cancel a queued http request with http.cancel(index)
+    All http.get and http.post requests return a table which can be used to cancel a queued http request with http.cancel(table)
     
     -Twig
 ]]
