@@ -1,0 +1,118 @@
+--@name Promises
+--@author Twig
+
+local Promise = {
+    __tostring = function(self)
+        local str = ''
+        if self.resolved then
+            local value = self.value
+            if value==self then
+                value = "self"
+            end
+            str = "<Promise: resolved, " .. tostring(value) .. ">"
+        elseif self.rejected then
+            local error = self.error
+            if error==self then
+                value = "self"
+            end
+            str = "<Promise: rejected, " .. tostring(value) .. ">"
+        else
+            str = "<Promise: pending...>"
+        end
+        return str
+    end
+}
+Promise.__index = Promise
+
+function Promise:new(func)
+    local newPromise = setmetatable({
+        ["resolved"] = false,
+        ["rejected"] = false
+    }, self)
+    
+    local newPromise = newPromise
+    
+    newPromise.Then = function(cb)
+        newPromise._then = cb
+        if resolved then
+            newPromise._then(newPromise.val)
+        end
+        
+        return newPromise
+    end
+    
+    newPromise.Catch = function(cb)
+        newPromise._catch = cb
+        
+        return newPromise
+    end
+    
+    local function resolve(val)
+        if newPromise.rejected then
+            error("Tried to resolve after rejecting!")
+        else
+            newPromise.resolved = true
+            newPromise.value = val
+            
+            if newPromise._then then
+                newPromise._then(val)
+            end
+        end
+    end
+    
+    local function reject(err)
+        if newPromise.resolved then
+            error("Tried to reject after resolving!")
+        else
+            newPromise.rejected = true
+            newPromise.error = err
+            
+            if newPromise._catch then
+                newPromise._catch(err)
+            else
+                error(err)
+            end
+        end
+    end
+    
+    timer.simple(0, function()
+        func(resolve, reject)
+    end)
+    
+    return newPromise
+end
+
+local function async(func)
+    return function(...)
+        coroutine.wrap(func)(...)
+    end
+end
+
+local function await(promise)
+    local thread = coroutine.running()
+    
+    local response
+    promise.Then(function(val)
+        response = val
+        coroutine.resume(thread)
+    end)
+    
+    coroutine.yield()
+    return response
+end
+
+return {Promise, async, await}
+
+--[[
+    Example:
+    
+    coolFunction = async(function()
+        local coolVar = await(Promise:new(res, rej)
+            --Do something like http.get and (res)olve/(rej)ect in the success/fail calbacks
+        end)
+    end)
+    
+    coolFunction()
+    
+    Yes async just returns a function that is the function you gave it but wrapped in a coroutine
+]]
