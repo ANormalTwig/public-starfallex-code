@@ -1,0 +1,566 @@
+--@name Twig's Path Tracer
+--@author a normal twig
+--@shared
+
+local maxCPU = cpuMax() * (SERVER and 0.69 or 0.7)
+
+local resolution = 256
+local samples = 4
+local bounces = 2
+local focalLength = 50
+local cameraWidth = 50
+
+local traceMode = "props"
+local traceModes = {
+    ["world"] = { nil, MASK.NPCWORLDSTATIC }, -- Only hits world.
+    ["props"] = { COLLISION_GROUP.PASSABLE_DOOR, MASK.SOLID }, -- Hits world and props.
+}
+
+local sunDirection = Vector(0, 0.5, 0.5)
+
+local pairs = pairs
+local cos, sin, log, sqrt, random, ceil, floor, min, max = math.cos, math.sin, math.log, math.sqrt, math.random, math.ceil, math.floor, math.min, math.max
+local trace_line = trace.line
+local coroutine_yield = coroutine.yield
+
+local colorInfluence = ceil(samples / 2) * 255
+
+local chunkCount = 16
+local chunkSize = resolution / chunkCount
+local chunkBits = 2 * log(chunkCount, 2)
+
+local totalChunks = chunkCount^2
+
+assert(chunkBits <= 32, "Chunk count exceeds maximum bit count.")
+
+local traceCollision = traceModes[traceMode][1]
+local traceMask = traceModes[traceMode][2]
+
+local startTime = timer.systime()
+
+local function diffuseTrace(color, origin, normal, bounces)
+    for i = 0, bounces do
+        if cpuAverage() > maxCPU then coroutine_yield() end
+
+        local result = trace_line(origin, origin + normal * 99999, nil, traceMask, traceCollision)
+
+        if result.HitSky then
+            color[4] = color[4] + ((sunDirection:dot(normal) + 1) / 2)^3
+            return
+        end
+
+        local ent = result.Entity
+        if ent:isValid() then
+            local clr = ent:getColor()
+            if ent:getMaterial() == "debug/debugdrawflat" then
+                color[1] = color[1] - (255 - clr[1]) / 255
+                color[2] = color[2] - (255 - clr[2]) / 255
+                color[3] = color[3] - (255 - clr[3]) / 255
+
+                color[4] = color[4] + 2
+                return
+            end
+
+            color[1] = color[1] - (260 - clr[1]) / colorInfluence
+            color[2] = color[2] - (260 - clr[2]) / colorInfluence
+            color[3] = color[3] - (260 - clr[3]) / colorInfluence
+        end
+
+        local hitNormal = result.HitNormal
+        local rd2 = 2 * normal:dot(hitNormal)
+
+        normal[1] = sqrt(-2 * log(random())) * cos(2 * 3.1415926 * random())
+            + rd2 * hitNormal[1] - normal[1]
+        normal[2] = sqrt(-2 * log(random())) * cos(2 * 3.1415926 * random())
+            + rd2 * hitNormal[2] - normal[2]
+        normal[3] = sqrt(-2 * log(random())) * cos(2 * 3.1415926 * random())
+            + rd2 * hitNormal[3] - normal[3]
+        normal:normalize()
+
+        if normal:dot(hitNormal) < 0 then
+            normal = -normal
+        end
+        origin = result.HitPos
+    end
+end
+
+local world = game.getWorld()
+local function initialTrace(color, origin, normal)
+    if cpuAverage() > maxCPU then coroutine_yield() end
+    normal:normalize()
+
+    local result = trace_line(origin, origin + normal * 99999, nil, traceMask, traceCollision)
+
+    if result.HitSky then
+        color[1] = 0.53
+        color[2] = 0.81
+        color[3] = 0.92
+
+        color[4] = ((sunDirection:dot(normal:getNormalized()) + 1) / 2)^3
+        return
+    end
+
+    local ent = result.Entity
+    if ent:isValid() then
+    local clr = ent:getColor()
+        local clr = ent:getColor()
+        if ent:getMaterial() == "debug/debugdrawflat" then
+            color[1] = color[1] - (255 - clr[1]) / 255
+            color[2] = color[2] - (255 - clr[2]) / 255
+            color[3] = color[3] - (255 - clr[3]) / 255
+
+            color[4] = color[4] + 2
+            return
+        end
+
+        color[1] = color[1] - (260 - clr[1]) / colorInfluence
+        color[2] = color[2] - (260 - clr[2]) / colorInfluence
+        color[3] = color[3] - (260 - clr[3]) / colorInfluence
+    end
+
+    local hitPos = result.HitPos
+    local hitNormal = result.HitNormal
+    local rd2 = 2 * normal:dot(hitNormal)
+
+    for i = 1, samples do
+        normal[1] = sqrt(-2 * log(random())) * cos(2 * 3.1415926 * random())
+            + rd2 * hitNormal[1] - normal[1]
+        normal[2] = sqrt(-2 * log(random())) * cos(2 * 3.1415926 * random())
+            + rd2 * hitNormal[2] - normal[2]
+        normal[3] = sqrt(-2 * log(random())) * cos(2 * 3.1415926 * random())
+            + rd2 * hitNormal[3] - normal[3]
+        normal:normalize()
+
+        if normal:dot(hitNormal) < 0 then
+            normal = -normal
+        end
+        diffuseTrace(color, hitPos, normal, bounces)
+    end
+    color[4] = color[4] / samples
+
+    return
+end
+
+--=================--
+-- SERVERSIDE CODE --
+--=================--
+if SERVER then
+
+-- Chunk Manager
+local neededChunks = {}
+local renderedChunks = {}
+local serverChunks = {}
+local playerChunks = {}
+
+for i = 0, totalChunks - 1 do
+    table.insert(neededChunks, i)
+end
+
+-- Player keepalive
+local heartbeats = {}
+net.receive("Heartbeat", function(_, ply)
+    heartbeats[ply] = true
+end)
+
+timer.create("Heartbeat", 5, 0, function()
+    local alivePlayers = {}
+    for ply, alive in pairs(heartbeats) do
+        if alive then
+            heartbeats[ply] = false
+            if ply:isValid() then
+                table.insert(alivePlayers, ply)
+            end
+        else
+            -- Heartbeat died
+            heartbeats[ply] = nil
+
+            -- Add chunks back into the pool
+            if playerChunks[ply] then
+                for id in pairs(playerChunks[ply]) do
+                    table.insert(neededChunks, id)
+                end
+                playerChunks[ply] = nil
+            end
+        end
+    end
+
+    if #alivePlayers > 0 then
+        net.start("Heartbeat")
+        net.send(alivePlayers)
+    end
+end)
+
+-- Send finished chunks to new players
+local chunkUpdates = {}
+hook.add("Think", "chunkUpdates", function()
+    local ply, chunks = next(chunkUpdates)
+    if not ply then return end
+    if not ply:isValid() or #chunks == 0 then
+        chunkUpdates[ply] = nil
+        return
+    end
+
+    local set = chunks[#chunks]
+    local str = set[2]
+    if net.getBytesLeft() > #str + 1024 then
+        table.remove(chunks)
+
+        net.start("ChunkRelay")
+        net.writeUInt(set[1], chunkBits)
+        net.writeUInt(#str, 32)
+        net.writeData(str, #str)
+        net.send(ply)
+    end
+end)
+
+local function assignPlayerChunk(ply)
+    if #neededChunks == 0 then return end
+    local chunkId = table.remove(neededChunks, math.random(1, #neededChunks))
+
+    net.start("RequestRender")
+    net.writeUInt(chunkId, chunkBits)
+    net.send(ply)
+
+    playerChunks[ply][chunkId] = true
+end
+
+net.receive("ClientReady", function(_, ply)
+    if not ply:testPVS(chip()) then return end
+    -- if ply ~= owner() then return end
+
+    if not playerChunks[ply] then
+        playerChunks[ply] = {}
+
+        assignPlayerChunk(ply)
+        assignPlayerChunk(ply)
+    else
+        -- Request previously assigned chunks
+        for id in pairs(playerChunks[ply]) do
+            net.start("RequestRender")
+            net.writeUInt(id, chunkBits)
+            net.send(ply)
+        end
+    end
+
+    local chunks = {}
+    for id, chunk in pairs(renderedChunks) do
+        table.insert(chunks, {id, chunk})
+    end
+    chunkUpdates[ply] = chunks
+
+    heartbeats[ply] = true
+end)
+
+-- Chunk Relaying
+local chunkRelayStack = {}
+hook.add("Think", "chunkRelayStack", function()
+    if #chunkRelayStack == 0 then return end
+    local nextMessage = chunkRelayStack[#chunkRelayStack]
+    local str = nextMessage[2]
+    if net.getBytesLeft() > #str + 1024 then
+        table.remove(chunkRelayStack)
+
+        local omit = nextMessage[3]
+        local sendTable = find.allPlayers(function(p) return p ~= omit end)
+
+        if #sendTable == 0 then return end
+
+        net.start("ChunkRelay")
+        net.writeUInt(nextMessage[1], chunkBits)
+        net.writeUInt(#str, 32)
+        net.writeData(str, #str)
+        net.send(sendTable)
+    end
+end)
+
+local function relayChunk(ply, id, str)
+    renderedChunks[id] = str
+
+    table.insert(chunkRelayStack, {id, str, ply})
+end
+
+net.receive("ChunkRelay", function(_, ply)
+    local id = net.readUInt(chunkBits)
+
+    if not (playerChunks[ply] and playerChunks[ply][id]) then return end
+    playerChunks[ply][id] = nil
+    assignPlayerChunk(ply)
+
+    relayChunk(ply, id, net.readData(net.readUInt(32)))
+end)
+
+-- Screen Spawning
+local ent = prop.createComponent(
+    chip():getPos() + chip():getUp() * 50,
+    Angle(90, math.round((chip():getPos() - owner():getPos()):getAngle()[2] / 15) * 15, 180),
+    "starfall_screen",
+    "models/hunter/plates/plate2x2.mdl",
+    true
+)
+ent:linkComponent(chip())
+ent:setParent(chip())
+
+-- Chunk Rendering
+local cameraUp = ent:getForward() * -1
+local cameraRight = ent:getRight() * -1
+local cameraForward = ent:getUp() * -1
+
+local cameraOrigin = ent:getPos()
+local screenYaw = ent:getAngles().y
+cameraOrigin = cameraOrigin + cameraForward * 20
+
+local topLeft     = cameraOrigin + cameraRight * -cameraWidth / 2 + cameraUp * cameraWidth / 2  + cameraForward * focalLength
+local topRight    = cameraOrigin + cameraRight * cameraWidth / 2  + cameraUp * cameraWidth / 2  + cameraForward * focalLength
+local bottomLeft  = cameraOrigin + cameraRight * -cameraWidth / 2 + cameraUp * -cameraWidth / 2 + cameraForward * focalLength
+local bottomRight = cameraOrigin + cameraRight * cameraWidth / 2  + cameraUp * -cameraWidth / 2 + cameraForward * focalLength
+
+local verticalIter   = (bottomRight - topRight) / resolution
+local horizontalIter = (topRight - topLeft) / resolution
+
+local serverChunkStack = {}
+hook.add("Think", "serverChunkStack", function()
+    if #serverChunkStack == 0 then return end
+    local nextMessage = serverChunkStack[#serverChunkStack]
+    local str = nextMessage[2]
+    if net.getBytesLeft() > #str + 1024 then
+        table.remove(serverChunkStack)
+
+        local sendTable = {}
+        for ply in pairs(heartbeats) do
+            if ply:isValid() then
+                table.insert(sendTable, ply)
+            end
+        end
+        if #sendTable == 0 then return end
+
+        net.start("ChunkRelay")
+        net.writeUInt(nextMessage[1], chunkBits)
+        net.writeUInt(#str, 32)
+        net.writeData(str, #str)
+        net.send(sendTable)
+    end
+end)
+
+local svRenderChunk -- Defined later
+
+local function assignServerChunk()
+    if #neededChunks == 0 then return end
+    table.insert(serverChunks, svRenderChunk(table.remove(neededChunks)))
+end
+
+hook.add("Think", "serverChunks", function()
+    if cpuAverage() > maxCPU or #serverChunks == 0 then return end
+    if serverChunks[1]() then
+        table.remove(serverChunks, 1)
+        assignServerChunk()
+    end
+end)
+
+svRenderChunk = function(id)
+    local x = id % chunkCount
+    local y = floor(id / chunkCount)
+
+    local x1 = x * chunkSize
+    local x2 = x1 + chunkSize - 1
+    local y1 = y * chunkSize
+    local y2 = y1 + chunkSize - 1
+
+    local ss = bit.stringstream()
+
+    return coroutine.wrap(function()
+        local hPos = topLeft + verticalIter * y1 + horizontalIter * x1
+
+        for y = y1, y2 do
+            local rayPos = hPos:clone()
+            for x = x1, x2 do
+                local color = {1, 1, 1, 0}
+                local normal = rayPos - cameraOrigin
+                initialTrace(color, cameraOrigin, normal, bounces)
+
+                ss:writeUInt8(max(floor(color[1] * 255), 0))
+                ss:writeUInt8(max(floor(color[2] * 255), 0))
+                ss:writeUInt8(max(floor(color[3] * 255), 0))
+                ss:writeUInt8(max(floor(color[4] * 255), 0))
+
+                rayPos:add(horizontalIter)
+            end
+            hPos:add(verticalIter)
+        end
+
+        local str = bit.compress(ss:getString())
+        renderedChunks[id] = str
+        table.insert(serverChunkStack, {id, str})
+
+        return true
+    end)
+end
+
+assignServerChunk()
+
+return
+end
+--=================--
+-- CLIENTSIDE CODE --
+--=================--
+
+setName(string.format("=== ]\nTwig's Ray Tracer\nResolution: %d\nSamples: %d\nBounces: %d\n[ ===", resolution, samples, bounces))
+
+-- Chunk Drawing
+local chunkRelayStack = {}
+hook.add("Think", "chunkRelayStack", function()
+    if #chunkRelayStack == 0 then return end
+    local nextMessage = chunkRelayStack[#chunkRelayStack]
+
+    local str = nextMessage[2]
+    if net.getBytesLeft() > #str + 1024 then
+        table.remove(chunkRelayStack)
+
+        net.start("ChunkRelay")
+        net.writeUInt(nextMessage[1], chunkBits)
+        net.writeUInt(#str, 32)
+        net.writeData(str, #str)
+        net.send()
+    end
+end)
+
+local chunksRendered = 0
+local chunkDrawRoutines = {}
+local colorBlack = Color(0, 0, 0)
+local function chunkDrawRoutine(id, ss)
+    local x = id % chunkCount
+    local y = floor(id / chunkCount)
+
+    local x1 = x * chunkSize
+    local x2 = x1 + chunkSize - 1
+    local y1 = y * chunkSize
+    local y2 = y1 + chunkSize - 1
+
+    return coroutine.wrap(function()
+        render.setColor(colorBlack)
+        render.drawRect(x1, y1, x2 - x1 + 1, y2 - y1 + 1)
+
+        for y = y1, y2 do
+            for x = x1, x2 do
+                if cpuAverage() > maxCPU then coroutine_yield() end
+                render.setRGBA(ss:readUInt8(), ss:readUInt8(), ss:readUInt8(), ss:readUInt8())
+                render.drawRect(x, y, 1, 1)
+            end
+        end
+
+        chunksRendered = chunksRendered + 1
+
+        return true
+    end)
+end
+
+net.receive("ChunkRelay", function()
+    local id = net.readUInt(chunkBits)
+    local ss = bit.stringstream(bit.decompress(net.readData(net.readUInt(32))))
+
+    table.insert(chunkDrawRoutines, chunkDrawRoutine(id, ss))
+end)
+
+render.createRenderTarget("canvas")
+hook.add("RenderOffscreen", "drawRoutines", function()
+    if cpuAverage() > maxCPU or #chunkDrawRoutines == 0 then return end
+
+    render.selectRenderTarget("canvas")
+    if chunkDrawRoutines[#chunkDrawRoutines]() then
+        table.remove(chunkDrawRoutines)
+        if chunksRendered == totalChunks and player() == owner() then
+            file.createDir("renders")
+            file.write("renders/raytracer-result" .. os.date("%Y-%m-%d_%H-%M-%S") .. ".png", render.captureImage({
+                format = "png",
+                x = 0, y = 0,
+                w = resolution, h = resolution,
+                alpha = false
+            }))
+            print(string.format("Saved render! Took %d seconds.", timer.systime() - startTime))
+        end
+    end
+end)
+
+hook.add("Render", "drawCanvas", function()
+    render.setFilterMin(1)
+    render.setFilterMag(1)
+    render.setRenderTargetTexture("canvas")
+    render.drawTexturedRect(0, 0, 512 / resolution * 1024, 512 / resolution * 1024)
+end)
+
+-- Chunk Rendering
+hook.add("ComponentLinked", "link", function(ent)
+    hook.remove("ComponentLinked", "link")
+
+    local cameraUp = ent:getForward() * -1
+    local cameraRight = ent:getRight() * -1
+    local cameraForward = ent:getUp() * -1
+
+    local cameraOrigin = ent:getPos()
+    local screenYaw = ent:getAngles().y
+    cameraOrigin = cameraOrigin + cameraForward * 20
+
+    local topLeft     = cameraOrigin + cameraRight * -cameraWidth / 2 + cameraUp * cameraWidth / 2  + cameraForward * focalLength
+    local topRight    = cameraOrigin + cameraRight * cameraWidth / 2  + cameraUp * cameraWidth / 2  + cameraForward * focalLength
+    local bottomLeft  = cameraOrigin + cameraRight * -cameraWidth / 2 + cameraUp * -cameraWidth / 2 + cameraForward * focalLength
+    local bottomRight = cameraOrigin + cameraRight * cameraWidth / 2  + cameraUp * -cameraWidth / 2 + cameraForward * focalLength
+
+    local verticalIter   = (bottomRight - topRight) / resolution
+    local horizontalIter = (topRight - topLeft) / resolution
+
+    local renderRoutines = {}
+    local function clRenderChunk(id)
+        local x = id % chunkCount
+        local y = floor(id / chunkCount)
+
+        local x1 = x * chunkSize
+        local x2 = x1 + chunkSize - 1
+        local y1 = y * chunkSize
+        local y2 = y1 + chunkSize - 1
+
+        local ss = bit.stringstream()
+
+        return coroutine.wrap(function()
+            local hPos = topLeft + verticalIter * y1 + horizontalIter * x1
+
+            for y = y1, y2 do
+                local rayPos = hPos:clone()
+                for x = x1, x2 do
+                    local color = {1, 1, 1, 0}
+                    local normal = rayPos - cameraOrigin
+                    initialTrace(color, cameraOrigin, normal, bounces)
+
+                    ss:writeUInt8(max(floor(color[1] * 255), 0))
+                    ss:writeUInt8(max(floor(color[2] * 255), 0))
+                    ss:writeUInt8(max(floor(color[3] * 255), 0))
+                    ss:writeUInt8(max(floor(color[4] * 255), 0))
+
+                    rayPos:add(horizontalIter)
+                end
+                hPos:add(verticalIter)
+            end
+
+            ss:seek(1)
+            table.insert(chunkDrawRoutines, chunkDrawRoutine(id, ss))
+            table.insert(chunkRelayStack, {id, bit.compress(ss:getString())})
+            return true
+        end)
+    end
+
+    hook.add("Think", "renderRoutines", function()
+        if cpuAverage() > maxCPU or #renderRoutines == 0 then return end
+        if renderRoutines[#renderRoutines]() then
+            table.remove(renderRoutines)
+        end
+    end)
+    net.receive("RequestRender", function()
+        table.insert(renderRoutines, clRenderChunk(net.readUInt(chunkBits)))
+    end)
+
+    net.receive("Heartbeat", function()
+        net.start("Heartbeat")
+        net.send()
+    end)
+
+    net.start("ClientReady")
+    net.send()
+end)
